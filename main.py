@@ -7,53 +7,39 @@ from models import (
     Order, OrderItem, OrderCreate, OrderRead, OrderItemRead
 )
 
-
-# --------- FastAPI app ----------
 app = FastAPI(title="Inventory & Order System")
 
-# --------- Database setup ----------
-
-# SQLite database file name
 sqlite_file_name = "inventory.db"
 sqlite_url = f"sqlite:///{sqlite_file_name}"
 
-# Create the database engine
-engine = create_engine(sqlite_url, echo=True)  # echo=True logs SQL to the console
+engine = create_engine(sqlite_url, echo=True)
 
 def create_db_and_tables() -> None:
     """Create database tables based on SQLModel models."""
     SQLModel.metadata.create_all(engine)
 
-# Run once at startup
 @app.on_event("startup")
 def on_startup() -> None:
     create_db_and_tables()
 
-# Dependency to get a session
 def get_session():
     with Session(engine) as session:
         yield session
 
-# --------- Health check endpoint ----------
-
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
-
-# --------- Product endpoints ----------
 
 @app.post("/products", response_model=ProductRead)
 def create_product(
     product: ProductCreate,
     session: Session = Depends(get_session),
 ):
-    # Create a Product instance from the incoming data
     db_product = Product.from_orm(product)
 
-    # Save to database
     session.add(db_product)
     session.commit()
-    session.refresh(db_product)  # reload with generated id
+    session.refresh(db_product)
 
     return db_product
 
@@ -85,7 +71,6 @@ def update_product(
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    # Update fields
     product.name = product_data.name
     product.sku = product_data.sku
     product.price = product_data.price
@@ -110,8 +95,6 @@ def delete_product(
     session.commit()
     return {"detail": "Product deleted"}
 
-# --------- Customer endpoints ----------
-
 @app.post("/customers", response_model=CustomerRead)
 def create_customer(
     customer: CustomerCreate,
@@ -123,7 +106,6 @@ def create_customer(
     session.refresh(db_customer)
     return db_customer
 
-
 @app.get("/customers", response_model=List[CustomerRead])
 def list_customers(
     session: Session = Depends(get_session),
@@ -131,7 +113,6 @@ def list_customers(
     statement = select(Customer)
     results = session.exec(statement).all()
     return results
-
 
 @app.get("/customers/{customer_id}", response_model=CustomerRead)
 def get_customer(
@@ -142,7 +123,6 @@ def get_customer(
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
     return customer
-
 
 @app.put("/customers/{customer_id}", response_model=CustomerRead)
 def update_customer(
@@ -163,7 +143,6 @@ def update_customer(
     session.refresh(customer)
     return customer
 
-
 @app.delete("/customers/{customer_id}")
 def delete_customer(
     customer_id: int,
@@ -177,14 +156,11 @@ def delete_customer(
     session.commit()
     return {"detail": "Customer deleted"}
 
-# --------- Order endpoints ----------
-
 @app.post("/orders", response_model=OrderRead)
 def create_order(
     order_data: OrderCreate,
     session: Session = Depends(get_session),
 ):
-    # 1) Confirm customer exists
     customer = session.get(Customer, order_data.customer_id)
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
@@ -192,8 +168,7 @@ def create_order(
     if len(order_data.items) == 0:
         raise HTTPException(status_code=400, detail="Order must have at least one item")
 
-    # 2) Validate stock for each item BEFORE modifying anything
-    products_to_update = []  # list of (product, quantity)
+    products_to_update = []
     for item in order_data.items:
         if item.quantity <= 0:
             raise HTTPException(status_code=400, detail="Item quantity must be > 0")
@@ -210,20 +185,16 @@ def create_order(
 
         products_to_update.append((product, item.quantity))
 
-    # 3) Create the order
     order = Order(customer_id=order_data.customer_id, status="PENDING")
     session.add(order)
     session.commit()
-    session.refresh(order)  # now order.id exists
+    session.refresh(order)
 
-    # 4) Create order items + decrement stock
     created_items: List[OrderItem] = []
     for product, qty in products_to_update:
-        # decrement stock
         product.current_stock -= qty
         session.add(product)
 
-        # create item
         order_item = OrderItem(
             order_id=order.id,
             product_id=product.id,
@@ -235,7 +206,6 @@ def create_order(
 
     session.commit()
 
-    # 5) Load items from DB for the response
     items = session.exec(select(OrderItem).where(OrderItem.order_id == order.id)).all()
 
     return OrderRead(
@@ -245,7 +215,6 @@ def create_order(
         created_at=order.created_at,
         items=[OrderItemRead(**item.model_dump()) for item in items],
     )
-
 
 @app.get("/orders", response_model=List[OrderRead])
 def list_orders(session: Session = Depends(get_session)):
@@ -264,7 +233,6 @@ def list_orders(session: Session = Depends(get_session)):
             )
         )
     return result
-
 
 @app.get("/orders/{order_id}", response_model=OrderRead)
 def get_order(order_id: int, session: Session = Depends(get_session)):

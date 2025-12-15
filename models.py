@@ -39,14 +39,11 @@ class CustomerRead(CustomerBase):
     """Schema for reading a customer (includes id)."""
     id: int
 
-# ---------- Order + OrderItem ----------
-
 class Order(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     customer_id: int
     status: str = "PENDING"
     created_at: datetime = Field(default_factory=datetime.utcnow)
-
 
 class OrderItem(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -55,20 +52,13 @@ class OrderItem(SQLModel, table=True):
     quantity: int
     unit_price: float
 
-
-# ---------- Schemas for creating an order ----------
-
 class OrderItemCreate(SQLModel):
     product_id: int
     quantity: int
 
-
 class OrderCreate(SQLModel):
     customer_id: int
     items: List[OrderItemCreate]
-
-
-# ---------- Schemas for reading an order ----------
 
 class OrderItemRead(SQLModel):
     id: int
@@ -76,7 +66,6 @@ class OrderItemRead(SQLModel):
     product_id: int
     quantity: int
     unit_price: float
-
 
 class OrderRead(SQLModel):
     id: int
