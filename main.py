@@ -3,8 +3,10 @@ from fastapi import Depends, FastAPI, HTTPException
 from sqlmodel import SQLModel, Session, create_engine, select
 from models import (
     Product, ProductCreate, ProductRead,
-    Customer, CustomerCreate, CustomerRead
+    Customer, CustomerCreate, CustomerRead,
+    Order, OrderItem, OrderCreate, OrderRead, OrderItemRead
 )
+
 
 # --------- FastAPI app ----------
 app = FastAPI(title="Inventory & Order System")
@@ -174,3 +176,108 @@ def delete_customer(
     session.delete(customer)
     session.commit()
     return {"detail": "Customer deleted"}
+
+# --------- Order endpoints ----------
+
+@app.post("/orders", response_model=OrderRead)
+def create_order(
+    order_data: OrderCreate,
+    session: Session = Depends(get_session),
+):
+    # 1) Confirm customer exists
+    customer = session.get(Customer, order_data.customer_id)
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    if len(order_data.items) == 0:
+        raise HTTPException(status_code=400, detail="Order must have at least one item")
+
+    # 2) Validate stock for each item BEFORE modifying anything
+    products_to_update = []  # list of (product, quantity)
+    for item in order_data.items:
+        if item.quantity <= 0:
+            raise HTTPException(status_code=400, detail="Item quantity must be > 0")
+
+        product = session.get(Product, item.product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail=f"Product not found: {item.product_id}")
+
+        if product.current_stock < item.quantity:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Not enough stock for product {product.id} (have {product.current_stock}, need {item.quantity})"
+            )
+
+        products_to_update.append((product, item.quantity))
+
+    # 3) Create the order
+    order = Order(customer_id=order_data.customer_id, status="PENDING")
+    session.add(order)
+    session.commit()
+    session.refresh(order)  # now order.id exists
+
+    # 4) Create order items + decrement stock
+    created_items: List[OrderItem] = []
+    for product, qty in products_to_update:
+        # decrement stock
+        product.current_stock -= qty
+        session.add(product)
+
+        # create item
+        order_item = OrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            quantity=qty,
+            unit_price=product.price,
+        )
+        session.add(order_item)
+        created_items.append(order_item)
+
+    session.commit()
+
+    # 5) Load items from DB for the response
+    items = session.exec(select(OrderItem).where(OrderItem.order_id == order.id)).all()
+
+    return OrderRead(
+        id=order.id,
+        customer_id=order.customer_id,
+        status=order.status,
+        created_at=order.created_at,
+        items=[OrderItemRead(**item.model_dump()) for item in items],
+    )
+
+
+@app.get("/orders", response_model=List[OrderRead])
+def list_orders(session: Session = Depends(get_session)):
+    orders = session.exec(select(Order)).all()
+
+    result: List[OrderRead] = []
+    for o in orders:
+        items = session.exec(select(OrderItem).where(OrderItem.order_id == o.id)).all()
+        result.append(
+            OrderRead(
+                id=o.id,
+                customer_id=o.customer_id,
+                status=o.status,
+                created_at=o.created_at,
+                items=[OrderItemRead(**item.model_dump()) for item in items],
+            )
+        )
+    return result
+
+
+@app.get("/orders/{order_id}", response_model=OrderRead)
+def get_order(order_id: int, session: Session = Depends(get_session)):
+    order = session.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    items = session.exec(select(OrderItem).where(OrderItem.order_id == order.id)).all()
+
+    return OrderRead(
+        id=order.id,
+        customer_id=order.customer_id,
+        status=order.status,
+        created_at=order.created_at,
+        items=[OrderItemRead(**item.model_dump()) for item in items],
+    )
